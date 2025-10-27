@@ -3,28 +3,63 @@ import re
 
 
 def open_file_dialog(parent, title):
+    # QFileDialog.getOpenFileName(부모 위젯, 창 제목, 기본 경로, 파일 필터)
     fname, _ = QFileDialog.getOpenFileName(parent, title, '', 'SMI Files (*.smi);;All Files (*)')
     return fname
 
 def select_save_path(parent, title):
+    # QFileDialog.getSaveFileName(부모 위젯, 창 제목, 기본 경로, 파일 필터)
     fname, _ = QFileDialog.getSaveFileName(parent, title, '', 'SMI Files (*.smi);;All Files (*)')
     return fname
 
+
+def read_file_auto_encoding(file_path):
+    # 1. utf-16 (BOM이 있는 유니코드 파일)
+    # 2. utf-8-sig (BOM이 있는 utf-8 파일)
+    # 3. cp949 (ANSI/EUC-KR 한글 윈도우 기본)
+    encodings_to_try = ['utf-16', 'utf-8-sig', 'cp949']
+
+    for enc in encodings_to_try:
+        try:
+            with open(file_path, 'r', encoding=enc) as f:
+                content = f.read()
+            # 성공 시, 파일 내용과 사용된 인코딩을 반환
+            print(f"  - 파일 인코딩 감지 성공: {enc}")
+            return content, enc
+        except UnicodeDecodeError:
+            continue  # 다음 인코딩 시도
+        except Exception as e:
+            print(f"[오류] 파일을 읽는 중 예외 발생 (인코딩: {enc}): {e}")
+            return None, None  # 그 외 오류
+
+    # 모든 인코딩 시도 실패
+    print(f"[오류] '{file_path}'의 인코딩을 감지할 수 없습니다. (지원되지 않는 형식)")
+    return None, None
+
 def find_all_subtitle_occurrences(file_path, search_text):
+    """
+    SMI 파일에서 특정 텍스트가 포함된 모든 라인을 찾아
+    [ {'ms': 시간_ms, 'text': 전체_자막_내용}, ... ] 리스트 형태로 반환합니다.
+    """
     results = []
     if not search_text:
         return results
 
+    # 1. 헬퍼 함수로 파일 읽기
+    content, _ = read_file_auto_encoding(file_path)  # 인코딩 이름은 필요 없음
+    if content is None:
+        return results  # 읽기 실패
+
     try:
-        with open(file_path, 'r', encoding='utf-16') as infile:
-            for line in infile:
-                if 'class=krcc' in line.lower() and search_text in line:
-                    match = re.search(r'<Sync Start=(\d+)>', line, re.IGNORECASE)
-                    if match:
-                        timestamp_ms = int(match.group(1))
-                        clean_line = re.sub(r'<.*?>', '', line).strip()
-                        if clean_line:
-                            results.append({'ms': timestamp_ms, 'text': clean_line})
+        # 2. 파일이 아닌 메모리의 content를 한 줄씩 처리
+        for line in content.splitlines():  # 여기선 keepends=True 불필요
+            if 'class=krcc' in line.lower() and search_text in line:
+                match = re.search(r'<Sync Start=(\d+)>', line, re.IGNORECASE)
+                if match:
+                    timestamp_ms = int(match.group(1))
+                    clean_line = re.sub(r'<.*?>', '', line).strip()
+                    if clean_line:
+                        results.append({'ms': timestamp_ms, 'text': clean_line})
     except Exception as e:
         print(f"[오류] 자막 검색 중 문제 발생: {e}")
 
@@ -42,11 +77,17 @@ def run_batch_adjustment(subtitle_file, save_file, time_offset):
         print("[오류] 조절 시간이 올바른 숫자가 아닙니다.")
         return False
 
-    try:
-        with open(subtitle_file, 'r', encoding='utf-16') as infile, \
-                open(save_file, 'w', encoding='utf-16') as outfile:
+        # 1. 헬퍼 함수로 파일 읽기
+    content, detected_encoding = read_file_auto_encoding(subtitle_file)
+    if content is None:
+        return False  # 읽기 실패
 
-            for line in infile:
+
+    try:
+        # 2. 감지된 인코딩으로 저장 파일 열기
+        with open(save_file, 'w', encoding=detected_encoding) as outfile:
+            # 3. 파일이 아닌 메모리의 content를 한 줄씩 처리
+            for line in content.splitlines(keepends=True):
                 match = re.search(r'<Sync Start=(\d+)>', line, re.IGNORECASE)
 
                 if match:
@@ -94,11 +135,16 @@ def run_specific_adjustment(subtitle_file, save_file, selected_sync_ms, target_t
 
     print(f"  - 계산된 시간 차이(offset): {offset_ms} ms")
 
-    try:
-        with open(subtitle_file, 'r', encoding='utf-16') as infile, \
-                open(save_file, 'w', encoding='utf-16') as outfile:
+    # 1. 헬퍼 함수로 파일 읽기
+    content, detected_encoding = read_file_auto_encoding(subtitle_file)
+    if content is None:
+        return False  # 읽기 실패
 
-            for line in infile:
+    try:
+        # 2. 감지된 인코딩으로 저장 파일 열기
+        with open(save_file, 'w', encoding=detected_encoding) as outfile:
+            # 3. 파일이 아닌 메모리의 content를 한 줄씩 처리
+            for line in content.splitlines(keepends=True):
                 match = re.search(r'<Sync Start=(\d+)>', line, re.IGNORECASE)
 
                 if match:
